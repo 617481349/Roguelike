@@ -1,0 +1,25 @@
+{
+  "name": "roguelike-survivor",
+  "version": "0.1.0",
+  "description": "弹壳特攻队风格的割草生存游戏",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/617481349/Roguelike.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/617481349/Roguelike/issues"
+  },
+  "homepage": "https://github.com/617481349/Roguelike#readme",
+  "devDependencies": {
+    "vite": "^8.0.8"
+  },
+  "dependencies": {
+    "phaser": "^3.80.1"
+  }
+}
