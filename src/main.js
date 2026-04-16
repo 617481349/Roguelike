@@ -22,9 +22,22 @@ const config = {
    * 类比前端：类似于选择用 CSS transform（GPU加速）还是 top/left（CPU计算）
    */
   type: Phaser.AUTO, // 自动选择使用 WebGL 还是 Canvas
-  with: 800,
+  width: 800,
   height: 600,
   backgroundColor: "#1a1a2e",
+  /**
+   * scale 配置 — 控制画布如何适配页面
+   *
+   * Phaser.Scale.FIT → 画布等比缩放，适应窗口大小（不变形）
+   * Phaser.Scale.CENTER_BOTH → 画布在页面中居中
+   *
+   * 不加这个配置时，Phaser 可能生成一个比配置更大的画布，
+   * 导致顶部内容被页面裁切
+   */
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
   /**
    * scene: 场景列表
    *

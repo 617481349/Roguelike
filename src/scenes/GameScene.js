@@ -17,6 +17,11 @@ import Phaser from "phaser";
  */
 
 export default class GameScene extends Phaser.Scene {
+  ENEMY_SPEED = 80;
+  BULLET_SPEED = 500; // 子弹飞行速度
+  FIRE_RATE = 300; // 射击间隔（毫秒），300ms = 每秒约3发
+  PLAYER_MAX_HP = 50; // 玩家最大血量
+
   /**
    * constructor 里调用 super({ key: 'xxx' })
    * key 是场景的唯一标识符，用于在其他地方切换到这个场景：
@@ -126,6 +131,7 @@ export default class GameScene extends Phaser.Scene {
     this.add.text(10, 10, "蛋壳特工队", {
       fontSize: "17px",
       color: "#fff",
+      padding: {y: 5},
     });
 
     /**
@@ -172,10 +178,91 @@ export default class GameScene extends Phaser.Scene {
      *   this.time.delayedCall(1000, fn)  → 延迟执行一次（类似 setTimeout）
      */
     this.time.addEvent({
-      delay: 500, // 每1000ms（1秒）生成一个敌人
+      delay: 200, // 每1000ms（1秒）生成一个敌人
       callback: this.spawnEnemy, // 调用的方法
       callbackScope: this, // this 指向当前场景（不加这个 this 会丢失）
       loop: true, // 持续循环
+    });
+
+    /**
+     * ==================== 子弹系统 ====================
+     */
+
+    /**
+     * this.physics.add.group(config)
+     *
+     * 带配置创建物理组。这里的关键配置：
+     *   runChildUpdate: true → 自动调用每个子对象的 update 方法
+     *                       （后续如果子弹是自定义类就需要，现在先用不到）
+     *
+     * 对象池工作原理：
+     *   bullets.get(x, y)  → 从池中取出一个可用对象
+     *     如果池里有"已回收"的对象 → 直接复用（不创建新的）
+     *     如果池是空的 → 创建一个新的
+     *   子弹飞出屏幕后 → setActive(false) 回收到池里
+     *
+     * 类比前端：
+     *   不用池：每次渲染列表都 new 组件 → 慢
+     *   用池：保持组件实例，只更新数据（类似 React 的 reconciliation）
+     */
+    this.bullets = this.physics.add.group();
+    /**
+     * 记录上次射击时间，用于控制射击频率
+     * 不用定时器而用手动计时，因为射击频率可能被技能改变
+     */
+    this.lastFireTime = 0;
+
+    /**
+     * ==================== 碰撞检测 ====================
+     */
+
+    /**
+     * this.physics.add.overlap(对象A, 对象B, 回调)
+     *
+     * 检测两组对象是否"重叠"（穿过彼此，不产生物理弹开）
+     * 每帧自动检测，有重叠时调用 callback
+     *
+     * 参数：
+     *   对象A   → 可以是单个对象或 Group
+     *   对象B   → 可以是单个对象或 Group
+     *   callback → 碰到时调用的函数 (objectA, objectB)
+     *
+     * 为什么用 overlap 而不是 collider？
+     *   collider → 碰到后互相弹开（子弹打到敌人不应该弹开）
+     *   overlap  → 只是检测碰到，不产生物理效果
+     *
+     * 类比前端：
+     *   前端: element.addEventListener('click', (e) => { ... })
+     *   游戏: this.physics.add.overlap(A, B, (a, b) => { ... })
+     *   区别：前端等用户操作，游戏每帧自动检测
+     */
+    this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+
+    /**
+     * 敌人碰到玩家的检测
+     *
+     * 这里用 collider 而不是 overlap，因为我们要敌人"被弹开"一点
+     * 这样敌人不会一直贴在玩家身上
+     */
+
+    this.physics.add.collider(this.player, this.enemies, this.enemyHitPlayer, null, this);
+
+    /**
+     * ==================== 玩家状态 ====================
+     */
+
+    this.playerHp = this.PLAYER_MAX_HP;
+
+    /**
+     * HP 显示文字
+     * 注意 setOrigin(0, 0) — 设置锚点为左上角
+     * 默认 text 的锚点是 (0, 0)（左上角），但 rectangle 是 (0.5, 0.5)（中心）
+     * setOrigin 可以统一它们的行为
+     */
+
+    this.hpText = this.add.text(10, 35, `HP: ${this.playerHp}`, {
+      fontSize: "17px",
+      color: "#fff",
     });
   }
 
@@ -215,7 +302,7 @@ export default class GameScene extends Phaser.Scene {
         break;
       }
     }
-    console.log(side, x, y);
+
     const enemy = this.add.rectangle(x, y, 24, 24, 0xff0000);
     this.enemies.add(enemy); // 加入物理组
 
@@ -238,6 +325,93 @@ export default class GameScene extends Phaser.Scene {
     // 设置敌人不会被玩家推动
     enemy.body.setImmovable(true);
   }
+
+  /**
+   * fireBullet() — 自动射击
+   *
+   * 找到最近的敌人，朝它发射一颗子弹
+   */
+  fireBullet() {
+    // 没有敌人就不射击
+    if (this.enemies.countActive() === 0) return;
+
+    /**
+     * this.physics.closest(source, targets)
+     *
+     * 从 targets 中找到离 source 最近的一个
+     * 返回：最近的游戏对象，或 null（如果 targets 为空）
+     */
+    const closestEnemy = this.physics.closest(this.player, this.enemies.getChildren());
+
+    if (!closestEnemy) return;
+
+    /**
+     * this.bullets.get(x, y)
+     *
+     * 从子弹组的对象池中取出一个
+     * 如果池里有回收的子弹 → 复用（性能好）
+     * 如果池是空的 → 创建新的 rectangle
+     *
+     * 但 get() 默认只创建一个空的 GameObject，不带图形
+     * 所以这里我们手动创建再添加到组
+     */
+    const bullet = this.add.rectangle(this.player.x, this.player.y, 8, 8, 0xffff00);
+    this.bullets.add(bullet);
+
+    /**
+     * this.physics.moveToObject(source, target, speed)
+     * 和敌人追踪玩家用的一样的方法，只是这次是子弹朝敌人飞
+     */
+    this.physics.moveToObject(bullet, closestEnemy, this.BULLET_SPEED);
+
+    /**
+     * 给子弹挂一个"超时销毁"
+     * 子弹飞了 2 秒还没命中 → 销毁（防止飞出屏幕的子弹永远存在）
+     *
+     * Phaser 有自动销毁的配置，但这里手动控制更容易理解
+     */
+    this.time.delayedCall(2000, () => {
+      if (bullet.active) {
+        bullet.destroy();
+      }
+    });
+  }
+
+  /**
+   * hitEnemy(bullet, enemy) — 子弹命中敌人
+   *
+   * 这是 overlap 回调，参数顺序和注册时一致：
+   *   overlap(bullets, enemies, callback) → callback(bullet, enemy)
+   */
+  hitEnemy(bullet, enemy) {
+    // 销毁子弹和敌人
+    bullet.destroy();
+    enemy.destroy();
+  }
+
+  /**
+   * enemyHitPlayer(player, enemy) — 敌人碰到玩家
+   *
+   * collider 回调，参数顺序也和注册时一致：
+   *   collider(player, enemies, callback) → callback(player, enemy)
+   */
+  enemyHitPlayer(player, enemy) {
+    this.playerHp--;
+
+    // 更新 HP 显示
+    this.hpText.setText(`HP: ${this.playerHp}`);
+    if (this.playerHp <= 0) {
+      this.physics.pause();
+      this.add
+        .text(400, 280, "游戏结束", {
+          fontSize: "48px",
+          color: "#ff0000",
+          padding: {x: 0, y: 5},
+        })
+        .setOrigin(0.5);
+    }
+  }
+
   /**
    * update(time, delta) — 每帧调用，游戏的核心循环
    *
@@ -314,5 +488,19 @@ export default class GameScene extends Phaser.Scene {
     this.enemies.getChildren().forEach((enemy) => {
       this.physics.moveToObject(enemy, this.player, 80);
     });
+
+    /**
+     * 自动射击
+     *
+     * 用 time（游戏总时间）和 lastFireTime（上次射击时间）的差来控制频率
+     *
+     * 为什么不用 time.addEvent？
+     *   因为射击频率后续会被技能改变（比如"攻速+50%"）
+     *   用时间差比定时器更灵活，随时改 FIRE_RATE 就行
+     */
+    if (time > this.lastFireTime + this.FIRE_RATE) {
+      this.fireBullet();
+      this.lastFireTime = time;
+    }
   }
 }
